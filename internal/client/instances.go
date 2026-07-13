@@ -37,3 +37,7 @@ func (c *Client) UpdateInstance(id string, in Instance) (*Instance, error) {
 func (c *Client) DeleteInstance(id string) error {
 	return c.request("DELETE", fmt.Sprintf("/api/v1/instances/%s", id), nil, nil)
 }
+
+func (c *Client) SendInstanceConsoleKeys(id string, cmd Command) error {
+	return c.request("POST", fmt.Sprintf("/api/v1/instances/%s/sendkeys", id), cmd, nil)
+}

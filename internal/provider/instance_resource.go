@@ -31,24 +31,26 @@ type InstanceResource struct{ c *client.Client }
 // ── model ──────────────────────────────────────────────────────────────────
 
 type InstanceResourceModel struct {
-	ID              types.String `tfsdk:"id"`
-	Name            types.String `tfsdk:"name"`
-	Description     types.String `tfsdk:"description"`
-	BootType        types.String `tfsdk:"boot_type"`
-	CPUCores        types.Int64  `tfsdk:"cpu_cores"`
-	CPUSockets      types.Int64  `tfsdk:"cpu_sockets"`
-	MemoryMB        types.Int64  `tfsdk:"memory_mb"`
-	SiteId          types.String `tfsdk:"site_id"`
-	DatastoreId     types.String `tfsdk:"datastore_id"`
-	ImageId         types.String `tfsdk:"image_id"`
-	UserData        types.String `tfsdk:"user_data"`
-	IPXEScript      types.String `tfsdk:"ipxe_script"`
-	SecureBoot      types.Bool   `tfsdk:"secure_boot"`
-	TPM             types.Bool   `tfsdk:"tpm"`
-	StartPoweredOff types.Bool   `tfsdk:"start_powered_off"`
-	Tags              types.Map  `tfsdk:"tags"`
-	WaitForGuest      types.Bool  `tfsdk:"wait_for_guest"`
-	GuestReadyTimeout types.Int64 `tfsdk:"guest_ready_timeout"`
+	ID                types.String `tfsdk:"id"`
+	Name              types.String `tfsdk:"name"`
+	Description       types.String `tfsdk:"description"`
+	BootType          types.String `tfsdk:"boot_type"`
+	CPUCores          types.Int64  `tfsdk:"cpu_cores"`
+	CPUSockets        types.Int64  `tfsdk:"cpu_sockets"`
+	MemoryMB          types.Int64  `tfsdk:"memory_mb"`
+	SiteId            types.String `tfsdk:"site_id"`
+	DatastoreId       types.String `tfsdk:"datastore_id"`
+	ImageId           types.String `tfsdk:"image_id"`
+	UserData          types.String `tfsdk:"user_data"`
+	WinAutoattend     types.String `tfsdk:"win_autoattend"`
+	IPXEScript        types.String `tfsdk:"ipxe_script"`
+	SecureBoot        types.Bool   `tfsdk:"secure_boot"`
+	TPM               types.Bool   `tfsdk:"tpm"`
+	StartPoweredOff   types.Bool   `tfsdk:"start_powered_off"`
+	InstanceType      types.String `tfsdk:"instance_type"`
+	Tags              types.Map    `tfsdk:"tags"`
+	WaitForGuest      types.Bool   `tfsdk:"wait_for_guest"`
+	GuestReadyTimeout types.Int64  `tfsdk:"guest_ready_timeout"`
 	// computed
 	PowerState           types.String `tfsdk:"power_state"`
 	InitializationStatus types.String `tfsdk:"initialization_status"`
@@ -94,6 +96,13 @@ type cdromModel struct {
 	Path        types.String `tfsdk:"path"`
 }
 
+type bootCommandModel struct {
+	Keys           types.String `tfsdk:"keys"`
+	Count          types.Int64  `tfsdk:"count"`
+	PauseBetweenMs types.Int64  `tfsdk:"pause_between_ms"`
+	PauseAfterMs   types.Int64  `tfsdk:"pause_after_ms"`
+}
+
 var networkInterfaceAttrTypes = map[string]attr.Type{
 	"id":           types.StringType,
 	"index_number": types.Int64Type,
@@ -123,6 +132,13 @@ var cdromAttrTypes = map[string]attr.Type{
 	"boot_order":   types.Int64Type,
 	"connected":    types.BoolType,
 	"path":         types.StringType,
+}
+
+var bootCommandAttrTypes = map[string]attr.Type{
+	"keys":            types.StringType,
+	"count":           types.Int64Type,
+	"pause_between_ms": types.Int64Type,
+	"pause_after_ms":  types.Int64Type,
 }
 
 // ── metadata / schema ──────────────────────────────────────────────────────
@@ -173,11 +189,20 @@ func (r *InstanceResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 				Optional: true,
 				Computed: true,
 				Default:  stringdefault.StaticString(""),
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+				},
 			},
 			"user_data": schema.StringAttribute{
 				Optional: true,
 				Computed: true,
 				Default:  stringdefault.StaticString(""),
+			},
+			"win_autoattend": schema.StringAttribute{
+				Optional:            true,
+				Computed:            true,
+				Default:             stringdefault.StaticString(""),
+				MarkdownDescription: "Windows unattend.xml content for automated Windows installations.",
 			},
 			"ipxe_script": schema.StringAttribute{
 				Optional: true,
@@ -193,6 +218,14 @@ func (r *InstanceResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 				Optional: true,
 				Computed: true,
 				Default:  booldefault.StaticBool(false),
+			},
+			"instance_type": schema.StringAttribute{
+				Optional: true,
+				Computed: true,
+				Default:  stringdefault.StaticString("virtualmachine"),
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+				},
 			},
 			"start_powered_off": schema.BoolAttribute{
 				Optional: true,
@@ -261,17 +294,25 @@ func (r *InstanceResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 				ElementType:         types.StringType,
 				Computed:            true,
 				MarkdownDescription: "IP addresses reported by the guest agent.",
+				PlanModifiers: []planmodifier.List{
+					listplanmodifier.UseStateForUnknown(),
+				},
 			},
 			// device lists
 			"network_interfaces": schema.ListNestedAttribute{
 				Optional: true,
 				Computed: true,
 				PlanModifiers: []planmodifier.List{
+					listplanmodifier.UseStateForUnknown(),
+					preserveNICComputed{},
 					listplanmodifier.RequiresReplace(),
 				},
 				NestedObject: schema.NestedAttributeObject{
 					Attributes: map[string]schema.Attribute{
-						"id":           schema.StringAttribute{Computed: true},
+						"id": schema.StringAttribute{
+							Computed:      true,
+							PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
+						},
 						"index_number": schema.Int64Attribute{Required: true},
 						"boot_order":   schema.Int64Attribute{Required: true},
 						"model": schema.StringAttribute{
@@ -284,7 +325,10 @@ func (r *InstanceResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 							Computed: true,
 							Default:  booldefault.StaticBool(true),
 						},
-						"mac_address": schema.StringAttribute{Computed: true},
+						"mac_address": schema.StringAttribute{
+							Computed:      true,
+							PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
+						},
 						"bridge_name": schema.StringAttribute{Required: true},
 						"subnet_id": schema.StringAttribute{
 							Optional: true,
@@ -298,11 +342,16 @@ func (r *InstanceResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 				Optional: true,
 				Computed: true,
 				PlanModifiers: []planmodifier.List{
+					listplanmodifier.UseStateForUnknown(),
+					preserveDiskComputed{},
 					listplanmodifier.RequiresReplace(),
 				},
 				NestedObject: schema.NestedAttributeObject{
 					Attributes: map[string]schema.Attribute{
-						"id":           schema.StringAttribute{Computed: true},
+						"id": schema.StringAttribute{
+							Computed:      true,
+							PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
+						},
 						"index_number": schema.Int64Attribute{Required: true},
 						"boot_order":   schema.Int64Attribute{Required: true},
 						"size_gb":      schema.Int64Attribute{Required: true},
@@ -311,12 +360,16 @@ func (r *InstanceResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 							Computed: true,
 							Default:  stringdefault.StaticString("virtio"),
 						},
-						"path":         schema.StringAttribute{Computed: true},
+						"path": schema.StringAttribute{
+							Computed:      true,
+							PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
+						},
 						"datastore_id": schema.StringAttribute{Required: true},
 						"existing_path": schema.StringAttribute{
-							Optional: true,
-							Computed: true,
-							Default:  stringdefault.StaticString(""),
+							Optional:      true,
+							Computed:      true,
+							Default:       stringdefault.StaticString(""),
+							PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 						},
 						"clone": schema.BoolAttribute{
 							Optional: true,
@@ -330,11 +383,16 @@ func (r *InstanceResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 				Optional: true,
 				Computed: true,
 				PlanModifiers: []planmodifier.List{
+					listplanmodifier.UseStateForUnknown(),
+					preserveCDROMComputed{},
 					listplanmodifier.RequiresReplace(),
 				},
 				NestedObject: schema.NestedAttributeObject{
 					Attributes: map[string]schema.Attribute{
-						"id":           schema.StringAttribute{Computed: true},
+						"id": schema.StringAttribute{
+							Computed:      true,
+							PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
+						},
 						"index_number": schema.Int64Attribute{Required: true},
 						"boot_order":   schema.Int64Attribute{Required: true},
 						"connected": schema.BoolAttribute{
@@ -475,10 +533,12 @@ func instanceFromModel(ctx context.Context, m InstanceResourceModel) client.Inst
 		DatastoreId:     m.DatastoreId.ValueString(),
 		ImageId:         m.ImageId.ValueString(),
 		UserData:        m.UserData.ValueString(),
+		WinAutoattend:   m.WinAutoattend.ValueString(),
 		IPXEScript:      m.IPXEScript.ValueString(),
 		SecureBoot:      m.SecureBoot.ValueBool(),
 		TPM:             m.TPM.ValueBool(),
 		StartPoweredOff: m.StartPoweredOff.ValueBool(),
+		InstanceType:    m.InstanceType.ValueString(),
 		Tags:            tagsFromModel(ctx, m.Tags),
 	}
 
@@ -549,10 +609,12 @@ func instanceToModel(ctx context.Context, inst *client.Instance, m *InstanceReso
 	m.DatastoreId = types.StringValue(inst.DatastoreId)
 	m.ImageId = types.StringValue(inst.ImageId)
 	m.UserData = types.StringValue(inst.UserData)
+	m.WinAutoattend = types.StringValue(inst.WinAutoattend)
 	m.IPXEScript = types.StringValue(inst.IPXEScript)
 	m.SecureBoot = types.BoolValue(inst.SecureBoot)
 	m.TPM = types.BoolValue(inst.TPM)
 	m.StartPoweredOff = types.BoolValue(inst.StartPoweredOff)
+	m.InstanceType = types.StringValue(inst.InstanceType)
 	m.PowerState = types.StringValue(inst.PowerState)
 	m.InitializationStatus = types.StringValue(inst.InitializationStatus)
 	m.PrimaryIPAddress = types.StringValue(inst.PrimaryIPAddress)
@@ -617,6 +679,144 @@ func instanceToModel(ctx context.Context, inst *client.Instance, m *InstanceReso
 	}
 	m.CDROMs, _ = types.ListValue(types.ObjectType{AttrTypes: cdromAttrTypes}, cdObjs)
 
+}
+
+// ── list plan modifiers ────────────────────────────────────────────────────
+//
+// The framework cannot correlate list elements when a nested attribute value is
+// unknown (e.g. existing_path references an image that is (known after apply)).
+// Without element correlation, UseStateForUnknown on individual nested attrs is
+// a no-op — there is no prior-state element to copy from.  These custom list-
+// level modifiers use positional matching to copy computed fields from state
+// before RequiresReplace evaluates, so unchanged instances are not replaced.
+
+type preserveNICComputed struct{}
+
+func (preserveNICComputed) Description(_ context.Context) string {
+	return "Preserves computed NIC fields (id, mac_address) from prior state."
+}
+func (preserveNICComputed) MarkdownDescription(ctx context.Context) string {
+	return preserveNICComputed{}.Description(ctx)
+}
+func (preserveNICComputed) PlanModifyList(ctx context.Context, req planmodifier.ListRequest, resp *planmodifier.ListResponse) {
+	if req.StateValue.IsNull() || req.StateValue.IsUnknown() || req.PlanValue.IsNull() || req.PlanValue.IsUnknown() {
+		return
+	}
+	var stateElems, planElems []networkInterfaceModel
+	if req.StateValue.ElementsAs(ctx, &stateElems, false).HasError() {
+		return
+	}
+	if req.PlanValue.ElementsAs(ctx, &planElems, false).HasError() {
+		return
+	}
+	if len(planElems) != len(stateElems) {
+		return
+	}
+	changed := false
+	for i := range planElems {
+		s, p := stateElems[i], &planElems[i]
+		if p.ID.IsUnknown() && !s.ID.IsUnknown() && !s.ID.IsNull() {
+			p.ID = s.ID
+			changed = true
+		}
+		if p.MacAddress.IsUnknown() && !s.MacAddress.IsUnknown() && !s.MacAddress.IsNull() {
+			p.MacAddress = s.MacAddress
+			changed = true
+		}
+	}
+	if changed {
+		newList, diags := types.ListValueFrom(ctx, types.ObjectType{AttrTypes: networkInterfaceAttrTypes}, planElems)
+		resp.Diagnostics.Append(diags...)
+		if !resp.Diagnostics.HasError() {
+			resp.PlanValue = newList
+		}
+	}
+}
+
+type preserveDiskComputed struct{}
+
+func (preserveDiskComputed) Description(_ context.Context) string {
+	return "Preserves computed disk fields (id, path, existing_path) from prior state."
+}
+func (preserveDiskComputed) MarkdownDescription(ctx context.Context) string {
+	return preserveDiskComputed{}.Description(ctx)
+}
+func (preserveDiskComputed) PlanModifyList(ctx context.Context, req planmodifier.ListRequest, resp *planmodifier.ListResponse) {
+	if req.StateValue.IsNull() || req.StateValue.IsUnknown() || req.PlanValue.IsNull() || req.PlanValue.IsUnknown() {
+		return
+	}
+	var stateElems, planElems []storageDiskModel
+	if req.StateValue.ElementsAs(ctx, &stateElems, false).HasError() {
+		return
+	}
+	if req.PlanValue.ElementsAs(ctx, &planElems, false).HasError() {
+		return
+	}
+	if len(planElems) != len(stateElems) {
+		return
+	}
+	changed := false
+	for i := range planElems {
+		s, p := stateElems[i], &planElems[i]
+		if p.ID.IsUnknown() && !s.ID.IsUnknown() && !s.ID.IsNull() {
+			p.ID = s.ID
+			changed = true
+		}
+		if p.Path.IsUnknown() && !s.Path.IsUnknown() && !s.Path.IsNull() {
+			p.Path = s.Path
+			changed = true
+		}
+		if p.ExistingPath.IsUnknown() && !s.ExistingPath.IsUnknown() && !s.ExistingPath.IsNull() {
+			p.ExistingPath = s.ExistingPath
+			changed = true
+		}
+	}
+	if changed {
+		newList, diags := types.ListValueFrom(ctx, types.ObjectType{AttrTypes: storageDiskAttrTypes}, planElems)
+		resp.Diagnostics.Append(diags...)
+		if !resp.Diagnostics.HasError() {
+			resp.PlanValue = newList
+		}
+	}
+}
+
+type preserveCDROMComputed struct{}
+
+func (preserveCDROMComputed) Description(_ context.Context) string {
+	return "Preserves computed CDROM fields (id) from prior state."
+}
+func (preserveCDROMComputed) MarkdownDescription(ctx context.Context) string {
+	return preserveCDROMComputed{}.Description(ctx)
+}
+func (preserveCDROMComputed) PlanModifyList(ctx context.Context, req planmodifier.ListRequest, resp *planmodifier.ListResponse) {
+	if req.StateValue.IsNull() || req.StateValue.IsUnknown() || req.PlanValue.IsNull() || req.PlanValue.IsUnknown() {
+		return
+	}
+	var stateElems, planElems []cdromModel
+	if req.StateValue.ElementsAs(ctx, &stateElems, false).HasError() {
+		return
+	}
+	if req.PlanValue.ElementsAs(ctx, &planElems, false).HasError() {
+		return
+	}
+	if len(planElems) != len(stateElems) {
+		return
+	}
+	changed := false
+	for i := range planElems {
+		s, p := stateElems[i], &planElems[i]
+		if p.ID.IsUnknown() && !s.ID.IsUnknown() && !s.ID.IsNull() {
+			p.ID = s.ID
+			changed = true
+		}
+	}
+	if changed {
+		newList, diags := types.ListValueFrom(ctx, types.ObjectType{AttrTypes: cdromAttrTypes}, planElems)
+		resp.Diagnostics.Append(diags...)
+		if !resp.Diagnostics.HasError() {
+			resp.PlanValue = newList
+		}
+	}
 }
 
 // ── tag helpers ────────────────────────────────────────────────────────────

@@ -97,16 +97,22 @@ func (p *NightlightProvider) Configure(ctx context.Context, req provider.Configu
 func (p *NightlightProvider) Resources(_ context.Context) []func() resource.Resource {
 	return []func() resource.Resource{
 		NewInstanceResource,
+		NewInstanceBootCommandsResource,
 		NewSubnetResource,
 		NewDatastoreResource,
 		NewSiteResource,
 		NewSwitchResource,
+		NewImageResource,
+		NewWanRouterResource,
+		NewContentLibraryResource,
 	}
 }
 
 func (p *NightlightProvider) DataSources(_ context.Context) []func() datasource.DataSource {
 	return []func() datasource.DataSource{
 		NewImageDataSource,
+		NewSiteDataSource,
+		NewSubnetDataSource,
 	}
 }
 
