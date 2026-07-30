@@ -74,6 +74,7 @@ type networkInterfaceModel struct {
 	MacAddress  types.String `tfsdk:"mac_address"`
 	BridgeName  types.String `tfsdk:"bridge_name"`
 	SubnetId    types.String `tfsdk:"subnet_id"`
+	Trunk       types.Bool   `tfsdk:"trunk"`
 }
 
 type storageDiskModel struct {
@@ -112,6 +113,7 @@ var networkInterfaceAttrTypes = map[string]attr.Type{
 	"mac_address":  types.StringType,
 	"bridge_name":  types.StringType,
 	"subnet_id":    types.StringType,
+	"trunk":        types.BoolType,
 }
 
 var storageDiskAttrTypes = map[string]attr.Type{
@@ -335,6 +337,12 @@ func (r *InstanceResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 							Computed: true,
 							Default:  stringdefault.StaticString(""),
 						},
+						"trunk": schema.BoolAttribute{
+							Optional:            true,
+							Computed:            true,
+							Default:             booldefault.StaticBool(false),
+							MarkdownDescription: "When true, the network interface operates in trunk mode, passing tagged VLAN traffic.",
+						},
 					},
 				},
 			},
@@ -556,6 +564,7 @@ func instanceFromModel(ctx context.Context, m InstanceResourceModel) client.Inst
 				MacAddress:  n.MacAddress.ValueString(),
 				BridgeName:  n.BridgeName.ValueString(),
 				SubnetId:    n.SubnetId.ValueString(),
+				Trunk:       n.Trunk.ValueBool(),
 			})
 		}
 	}
@@ -642,6 +651,7 @@ func instanceToModel(ctx context.Context, inst *client.Instance, m *InstanceReso
 			"mac_address":  types.StringValue(n.MacAddress),
 			"bridge_name":  types.StringValue(n.BridgeName),
 			"subnet_id":    types.StringValue(n.SubnetId),
+			"trunk":        types.BoolValue(n.Trunk),
 		})
 		nicObjs[i] = obj
 	}

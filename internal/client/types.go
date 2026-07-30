@@ -59,6 +59,7 @@ type NetworkInterface struct {
 	MacAddress  string `json:"macAddress,omitempty"`
 	BridgeName  string `json:"bridgeName,omitempty"`
 	SubnetId    string `json:"subnetId,omitempty"`
+	Trunk       bool   `json:"trunk"`
 }
 
 type StorageDisk struct {
